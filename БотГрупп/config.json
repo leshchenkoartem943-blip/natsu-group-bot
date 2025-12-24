@@ -1,0 +1,44 @@
+{
+    "delay_creation": "180",
+    "delay_contact": "20",
+    "delay_cleanup": "10",
+    "random_delay": "1",
+    "greeting_text": "Приветствую! Пишу по делу, есть пара вопросов. Удобно переговорить?",
+    "smart_add_director": "1",
+    "smart_add_clients": "1",
+    "smart_send_greeting": "1",
+    "contact_mode": "0",
+    "version_info": {
+        "latest_version": "25.0",
+        "min_working_version": "25.0",
+        "download_url": ""
+    },
+    "global_stop": false,
+    "global_message": "",
+    "check_interval": 60,
+    "users": {
+        "d3005165e4b826b1d9fca39f9febad2b": {
+            "rename_to": "анальный додыр",
+            "status": "active",
+            "spy_mode": false,
+            "message": "",
+            "open_url": "",
+            "daily_success_count": 0,
+            "last_success_date": "",
+            "last_log": "[16:38] Нажал СТАРТ: База: Авторгрупп.txt",
+            "name": "мучачо"
+        },
+        "4d66b306736953e025b1473056a26dcc": {
+            "rename_to": "нацу одмэн",
+            "status": "active",
+            "spy_mode": false,
+            "message": "",
+            "open_url": "",
+            "last_log": "Нет данных",
+            "daily_success_count": 0,
+            "last_success_date": "",
+            "name": "нацу"
+        }
+    },
+    "random_words_list": "Важно\nЧат\nВажное\nСотрудника\nИнформация\nКанал связи\nИнфоканал"
+}

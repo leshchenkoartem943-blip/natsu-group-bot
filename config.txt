@@ -1,0 +1,16 @@
+delay_creation=4
+delay_username=3
+delay_contact=4
+delay_cleanup=3
+random_delay=1
+add_username=0
+add_contacts=0
+contact_mode=0
+separators=:
+words=Общение
+фцв
+фцв
+min_delay=5000
+max_delay=10000
+add_mode=0
+username=

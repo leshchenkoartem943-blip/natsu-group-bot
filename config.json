@@ -1,0 +1,52 @@
+{
+    "delay_creation": "2",
+    "delay_contact": "2",
+    "delay_cleanup": "10",
+    "random_delay": "1",
+    "random_min": "4",
+    "random_max": "9",
+    "greeting_text": "Приветствую! Пишу по делу, есть пара вопросов. Удобно переговорить?",
+    "smart_add_director": "1",
+    "smart_add_clients": "1",
+    "smart_send_greeting": "1",
+    "contact_mode": "0",
+    "version_info": {
+        "latest_version": "25.0",
+        "min_working_version": "25.0",
+        "download_url": ""
+    },
+    "global_stop": false,
+    "global_message": "",
+    "check_interval": 60,
+    "users": {
+        "d3005165e4b826b1d9fca39f9febad2b": {
+            "rename_to": "хакерТрахер",
+            "status": "active",
+            "spy_mode": false,
+            "message": "",
+            "open_url": "",
+            "daily_success_count": 0,
+            "last_success_date": "",
+            "last_log": "[16:38] Нажал СТАРТ: База: Авторгрупп.txt",
+            "name": "хакерТрахер"
+        },
+        "4d66b306736953e025b1473056a26dcc": {
+            "rename_to": "нацу одмэн",
+            "status": "active",
+            "spy_mode": false,
+            "message": "",
+            "open_url": "",
+            "last_log": "[11:09] Нажал СТАРТ: База: 7705987090_научные_исследования_14.txt",
+            "daily_success_count": 0,
+            "last_success_date": "",
+            "name": "нацу",
+            "stats": {
+                "date": "2025-12-19",
+                "count": 1
+            }
+        }
+    },
+    "add_username": "1",
+    "add_contacts": "1",
+    "random_words_list": "Чат\nКанал связи\nИнфоканал \nСотрудникам"
+}
