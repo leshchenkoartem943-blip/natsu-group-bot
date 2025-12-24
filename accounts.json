@@ -1,0 +1,42 @@
+[
+    {
+        "phone": "79630656323",
+        "session_file": "C:/Users/Dell/Desktop/нацу группы/session_+79630656323.session"
+    },
+    {
+        "phone": "+79820802221",
+        "session_file": "session_+79820802221.session",
+        "api_id": "37656006",
+        "api_hash": "e4d4fc5b7d67cfcc6cf9b4abf542fea5"
+    },
+    {
+        "phone": "+79298134112",
+        "session_file": "session_+79298134112.session",
+        "api_id": "32286361",
+        "api_hash": "09de3dd3cddc63520ae0f0f44fa2438e"
+    },
+    {
+        "phone": "+79923275094",
+        "session_file": "session_+79923275094.session",
+        "api_id": "38214109",
+        "api_hash": "a4f4f5c7de29efb126f94c1e4cf5600b",
+        "status": "Active",
+        "username": null,
+        "name": "Алла Пучкова"
+    },
+    {
+        "phone": "+79380845459",
+        "session_file": "session_+79380845459.session",
+        "api_id": "30205950",
+        "api_hash": "90a7617770cbd83785cbb49fabc6f3dd",
+        "status": "Wait Auth"
+    },
+    {
+        "phone": "+79327047290",
+        "session_file": "session_+79327047290.session",
+        "api_id": "32125427",
+        "api_hash": "a0eb7326f6e1333a7866330ccadd06eb",
+        "name": "Не авторизован",
+        "status": "Wait Auth"
+    }
+]

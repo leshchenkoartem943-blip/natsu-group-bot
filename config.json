@@ -1,14 +1,14 @@
 {
-    "delay_creation": "2",
-    "delay_contact": "2",
+    "delay_creation": "4",
+    "delay_contact": "4",
     "delay_cleanup": "10",
     "random_delay": "0",
+    "random_min": "4",
+    "random_max": "9",
     "greeting_text": "Приветствую! Пишу по делу, есть пара вопросов. Удобно переговорить?",
     "smart_add_director": "1",
     "smart_add_clients": "1",
     "smart_send_greeting": "1",
-    "random_min": "4",
-    "random_max": "9",
     "contact_mode": "0",
     "version_info": {
         "latest_version": "25.0",

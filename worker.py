@@ -4,9 +4,12 @@ import tkinter.simpledialog as simpledialog
 import os
 import sys
 import pygame
+
 import random
 import requests
+from telethon import functions, types
 import json
+from telethon.tl.functions.messages import EditChatAdminRequest
 from telethon import utils
 import threading
 import glob
@@ -2767,6 +2770,7 @@ async def auto_setup_profile(client, first_name, last_name="", is_director=False
     except Exception as e:
         log_msg("WARN", f"⚠️ Ошибка настройки профиля: {e}")
 
+
 def start_process_from_contacts():
     """Запуск работы по контактам телефонной книги БЕЗ файла базы."""
     try:
@@ -4277,6 +4281,7 @@ def open_add_account_window(on_close_callback):
     btn_save = ttk.Button(f_btns, text="💾 Сохранить данные", command=save_manual_btn)
     btn_save.pack(fill="x")
 
+
 # === ГЛАВНАЯ ВКЛАДКА (DASHBOARD) ===
 def create_dashboard_tab(parent):
     # Основной контейнер с отступами
@@ -4439,7 +4444,8 @@ def create_dashboard_tab(parent):
     action_frame.columnconfigure(0, weight=1)
     action_frame.columnconfigure(1, weight=1)
 
-    global smart_btn, contacts_btn, no_auth_btn, stop_btn, safe_btn
+    global smart_btn, contacts_btn, no_auth_btn, stop_btn, safe_btn, tapok_btn # <--- ДОБАВЬТЕ tapok_btn СЮДА
+    
     smart_btn = ttk.Button(action_frame, text="🚀 ПО БАЗЕ (TXT)", command=lambda: start_process("smart"), style="Green.TButton")
     smart_btn.grid(row=0, column=0, sticky="ew", padx=2, pady=2, ipady=5)
     
@@ -4450,7 +4456,7 @@ def create_dashboard_tab(parent):
     no_auth_btn.grid(row=1, column=0, sticky="ew", padx=2, pady=2, ipady=5)
 
     stop_btn = ttk.Button(action_frame, text="🛑 СТОП", command=stop_process, style="Red.TButton")
-    stop_btn.grid(row=1, column=1, sticky="ew", padx=2, pady=2, ipady=5)
+    stop_btn.grid(row=2, column=0, columnspan=2, sticky="ew", padx=2, pady=5, ipady=5)
 
 
     # --- БЛОК 3: ЛОГ ---
