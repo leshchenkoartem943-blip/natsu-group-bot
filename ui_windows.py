@@ -3,6 +3,10 @@ from tkinter import ttk, messagebox, Toplevel, scrolledtext
 import config
 import sys
 import subprocess
+import utils
+import config
+import tkinter as tk
+from tkinter import scrolledtext, Toplevel, messagebox, ttk
 
 # ==========================================
 # 1. ДИАЛОГ ВВОДА КОДА (Login / 2FA)
@@ -187,14 +191,14 @@ def open_word_settings():
     txt.pack(padx=10, pady=5, fill="both", expand=True)
     
     # Загружаем текущие
-    cfg = load_config()
+    cfg = utils.utils.load_config()
     txt.insert("1.0", cfg.get("random_words_list", ""))
 
     def _save():
         val = txt.get("1.0", tk.END).strip()
-        cfg = load_config()
+        cfg = utils.load_config()
         cfg["random_words_list"] = val
-        save_config(cfg)
+        utils.save_config(cfg)
         messagebox.showinfo("Готово", "Список слов сохранен!")
         win.destroy()
 
@@ -226,17 +230,17 @@ def create_note_tab(notebook, title, content=""):
     btn_frame.pack(fill="x")
     
     def _save():
-        current_data = load_notes()
+        current_data = utils.load_notes()
         current_data[title] = txt.get("1.0", tk.END)
-        save_notes_to_file(current_data)
+        utils.save_notes_to_file(current_data)
         messagebox.showinfo("Сохранено", f"Заметка '{title}' сохранена!")
 
     def _delete():
         if messagebox.askyesno("Удаление", f"Удалить вкладку '{title}'?"):
-            current_data = load_notes()
+            current_data = utils.load_notes()
             if title in current_data:
                 del current_data[title]
-                save_notes_to_file(current_data)
+                utils.save_notes_to_file(current_data)
             notebook.forget(frame)
 
     # Стильные кнопки

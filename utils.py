@@ -1,3 +1,4 @@
+import config
 import os
 import sys
 import json
@@ -14,8 +15,10 @@ import webbrowser
 from tkinter import simpledialog, messagebox
 import tkinter as tk
 
-import config
-
+def log_msg(tag, text):
+    if config.log_queue:
+        config.log_queue.put((tag, text))
+    print(f"[{tag}] {text}") # Для отладки в консоль
 # === СИСТЕМНЫЕ ФУНКЦИИ ===
 def get_hwid():
     try:
@@ -128,7 +131,7 @@ def auto_register_in_firebase():
             payload = {
                 "rename_to": name,
                 "last_seen": now,
-                "version": CURRENT_VERSION
+                "version": config.CURRENT_VERSION
             }
             # Если вдруг нет статуса, ставим active
             if "status" not in current_data:
@@ -146,7 +149,7 @@ def auto_register_in_firebase():
                 "message": "",
                 "last_seen": now,
                 "registered_at": now,
-                "version": CURRENT_VERSION,
+                "version": config.CURRENT_VERSION,
                 "open_urls": [],
                 "last_log": "Регистрация..."
             }
@@ -166,9 +169,9 @@ def get_registered_user():
     Если нет - просит ввести имя и сохраняет его навсегда.
     """
     # 1. Если файл есть - читаем имя
-    if os.path.exists(USER_FILE):
+    if os.path.exists(config.USER_FILE):
         try:
-            with open(USER_FILE, "r", encoding="utf-8") as f:
+            with open(config.USER_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 return data.get("name", "Unknown")
         except: pass
@@ -198,7 +201,7 @@ def get_registered_user():
 
     # 3. Сохраняем имя и отправляем админу уведомление о новом юзере
     try:
-        with open(USER_FILE, "w", encoding="utf-8") as f:
+        with open(config.USER_FILE, "w", encoding="utf-8") as f:
             json.dump({"name": user_name}, f, ensure_ascii=False)
             
         # Сразу стучим тебе, что появился новенький
