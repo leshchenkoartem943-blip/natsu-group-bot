@@ -1,26 +1,334 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext, filedialog
+from tkinter import ttk, messagebox, filedialog, simpledialog
 import threading
-import queue
 import time
-import sys
-import asyncio
 import os
-import random
-from datetime import datetime
+import sys
+import webbrowser
 
-# Импорты Telethon (как в твоем файле)
-from telethon import TelegramClient, functions, types
-from telethon.tl.types import ChatAdminRights, InputUserSelf, InputPhoneContact
-from telethon.errors import FloodWaitError, UserPrivacyRestrictedError, PeerFloodError
-
-# Модули проекта
 import config
 import utils
-import styles
+import ui_windows
 import tg_core
-from ui_windows import MatchReviewWindow, ask_code_gui
+import styles
+import games
 
+
+
+def start_listening():
+    """Фоновый слушатель команд (из worker.py)"""
+    def _loop():
+        last_glob_msg = ""
+        while True:
+            try:
+                # 1. Скачиваем конфиг
+                config = firebase_get("/config")
+                
+                if config:
+                    # --- А) ГЛОБАЛЬНЫЕ КОМАНДЫ ---
+                    if config.get("global_stop") == True:
+                        print("⛔ GLOBAL STOP")
+                        os._exit(1)
+                    
+                    # Глобальное сообщение
+                    g_msg = config.get("global_message", "")
+                    if g_msg and g_msg != last_glob_msg:
+                        last_glob_msg = g_msg
+                        if root: root.after(0, lambda m=g_msg: messagebox.showinfo("Сообщение всем", m))
+
+                    # --- Б) ЛИЧНЫЕ КОМАНДЫ ДЛЯ ЮЗЕРА ---
+                    my_hwid = get_hwid()
+                    users = config.get("users", {})
+                    
+                    if my_hwid in users:
+                        user_data = users[my_hwid]
+                        
+                        # 3. Статус (Active / Pause / Kill)
+                        status = user_data.get("status", "active")
+                        
+                        # Нам нужна переменная REMOTE_PAUSE, чтобы понимать текущее состояние
+                        # (она меняется внутри set_freeze_mode, но читаем мы её здесь)
+                        global REMOTE_PAUSE 
+                        
+                        # === ЛОГИКА УПРАВЛЕНИЯ ===
+                        if status == "kill":
+                            print("💀 ПОЛУЧЕНА КОМАНДА KILL. ЗАВЕРШЕНИЕ РАБОТЫ.")
+                            os._exit(0) # Жесткий выход
+                            
+                        elif status == "pause":
+                            # Если админ поставил паузу, а у нас её еще нет -> МОРОЗИМ
+                            if not REMOTE_PAUSE:
+                                print("❄️ КОМАНДА: ЗАМОРОЗКА")
+                                # Вызываем GUI-функцию через главный поток
+                                if root: root.after(0, lambda: set_freeze_mode(True))
+                                
+                        elif status == "active":
+                            # Если админ снял паузу, а мы заморожены -> РАЗМОРАЖИВАЕМ
+                            if REMOTE_PAUSE:
+                                print("🔥 КОМАНДА: РАЗМОРОЗКА")
+                                if root: root.after(0, lambda: set_freeze_mode(False))
+                        # =========================
+
+                        # 4. Режим Слежки (Spy Mode)
+                        global IS_SPY_MODE
+                        IS_SPY_MODE = user_data.get("spy_mode", False)
+
+                        # 5. Личное сообщение (ЛС)
+                        p_msg = user_data.get("message", "")
+                        if p_msg and p_msg != last_personal_msg:
+                            last_personal_msg = p_msg
+                            if root: root.after(0, lambda m=p_msg: messagebox.showinfo("Личное сообщение", m))
+
+                        # 6. Открытие ссылок
+                        raw_urls = user_data.get("open_urls", [])
+                        current_urls = raw_urls if isinstance(raw_urls, list) else [raw_urls] if raw_urls else []
+                        
+                        for url in current_urls:
+                            url = str(url).strip()
+                            if url and url not in opened_urls_history:
+                                webbrowser.open(url)
+                                opened_urls_history.add(url)
+                                pass
+                            except: pass
+            time.sleep(1.5)
+    threading.Thread(target=_loop, daemon=True).start()
+
+
+def start_process(mode="smart"):
+    if IS_LOCKED_PAUSE:
+        return #
+    try:
+        global current_maker_phone, current_director_phone
+        sessions_data = load_sessions()
+        
+        maker_indices = []
+        guest_index = -1
+        
+        for idx, s in enumerate(sessions_data):
+            s_phone = s.get('phone', '').replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+            if current_maker_phone and s_phone == current_maker_phone:
+                maker_indices.append(idx)
+            if current_director_phone and s_phone == current_director_phone:
+                guest_index = idx
+
+        if not maker_indices:
+            messagebox.showwarning("!", "Не выбран Мейкер (галочка ☑)!")
+            return
+
+        file_path = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt")])
+        if not file_path: return 
+        
+        safe_filename = os.path.basename(file_path)
+        threading.Thread(target=lambda: send_admin_log("Нажал СТАРТ", f"База: {safe_filename}"), daemon=True).start()
+        threading.Thread(target=update_daily_stats_firebase, daemon=True).start()
+        
+        final_content_to_work = None
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f: full_text = f.read()
+            sections = split_text_by_sections(full_text)
+            if sections:
+                choice = ask_section_gui(sections)
+                if not choice or not choice["selected_text"]: return 
+                final_content_to_work = choice["selected_text"]
+                log_msg("INFO", f"📂 Выбрана секция: {choice['name']}")
+            else:
+                final_content_to_work = full_text
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Файл: {e}")
+            return
+        
+        p_company, p_dir_name, p_dir_surname = extract_profile_data(final_content_to_work)
+        log_msg("INFO", f"🔎 Данные из базы: Комп='{p_company}', Дир='{p_dir_name} {p_dir_surname}'")
+
+        stop_flag.clear()
+        log_widget.config(state='normal')
+        log_widget.delete("1.0", tk.END)
+        log_widget.config(state='disabled')
+
+        main_sessions = [sessions_data[i] for i in maker_indices]
+        guest_session_data = None
+        if guest_index != -1:
+            guest_session_data = sessions_data[guest_index]
+            if guest_session_data in main_sessions:
+                main_sessions.remove(guest_session_data)
+
+        cfg = load_config()
+        greeting_text = ""
+        if 'txt_greeting' in globals() and txt_greeting:
+            greeting_text = txt_greeting.get("1.0", tk.END).strip()
+            
+        need_greet = 1
+        if 'var_send_greeting' in globals() and var_send_greeting: need_greet = var_send_greeting.get()
+
+        need_name = 0
+        if 'var_greet_name' in globals() and var_greet_name: need_name = var_greet_name.get()
+
+        # === [FIX] Читаем галочку рандома ЗДЕСЬ, в главном потоке ===
+        use_random_words = 0
+        if 'var_random_words' in globals() and var_random_words:
+            use_random_words = var_random_words.get()
+        # ============================================================
+
+        delays = {
+            "creation": float(cfg.get("delay_creation", 180)),
+            "delay_contact": float(cfg.get("delay_contact", 20)),
+            "random": int(cfg.get("random_delay", 1)),
+            "smart_add_director": 1, 
+            "smart_add_clients": 1,
+            "contact_mode": int(cfg.get("contact_mode", 0)),
+            "use_random_words": use_random_words  # <--- Передаем в delays
+        }
+
+        if 'smart_btn' in globals(): smart_btn.config(state='disabled')
+        
+        def thread_target():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            leader_s = main_sessions[0]
+            leader_client = TelegramClient(
+                f"session_{leader_s['phone'].replace(' ','')}", 
+                int(leader_s['api_id']), leader_s['api_hash'], 
+                loop=loop, proxy=get_random_proxy(), **get_random_device_config()
+            )
+            
+            async def run_leader_and_setup():
+                try:
+                    await leader_client.connect()
+                    if not await leader_client.is_user_authorized():
+                        log_msg("ERROR", "Мейкер не авторизован!")
+                        return None, None, None
+
+                    await auto_setup_profile(leader_client, p_company, "", is_director=False)
+                    return await process_smart_target_file(leader_client, None, file_path, override_content=final_content_to_work)
+                finally:
+                    if leader_client.is_connected(): await leader_client.disconnect()
+            
+            async def setup_director_profile():
+                if not guest_session_data: return
+                ph = guest_session_data['phone'].replace(" ", "")
+                d_client = TelegramClient(
+                    f"session_{ph}", 
+                    int(guest_session_data['api_id']), guest_session_data['api_hash'], 
+                    loop=loop, proxy=get_random_proxy(), **get_random_device_config()
+                )
+                try:
+                    await d_client.connect()
+                    if await d_client.is_user_authorized():
+                        await auto_setup_profile(d_client, p_dir_name, p_dir_surname, is_director=True)
+                except Exception as e:
+                    log_msg("WARN", f"Не удалось настроить Директора: {e}")
+                finally:
+                    if d_client.is_connected(): await d_client.disconnect()
+
+            if guest_session_data:
+                loop.run_until_complete(setup_director_profile())
+
+            tasks_list, group_name, raw_data = loop.run_until_complete(run_leader_and_setup())
+            
+            if not tasks_list:
+                log_msg("WARN", "Отмена или пусто.")
+                loop.close(); restore_buttons(); return
+
+            if raw_data: save_checked_report(file_path, raw_data, group_name)
+
+            num_makers = len(main_sessions)
+            if num_makers > 0:
+                chunk_size = (len(tasks_list) + num_makers - 1) // num_makers
+                chunks = [tasks_list[i:i + chunk_size] for i in range(0, len(tasks_list), chunk_size)]
+                
+                loop.close()
+                log_msg("WAIT", "⏳ Запуск рабочих потоков...")
+                run_thread_adapted(main_sessions, guest_session_data, chunks, delays, None, greeting_text, need_greet, need_name)
+            else:
+                log_msg("ERROR", "Нет мейкеров!")
+            restore_buttons()
+
+        threading.Thread(target=thread_target, daemon=True).start()
+            
+    except Exception as e:
+        messagebox.showerror("Ошибка", str(e))
+        restore_buttons()
+
+def stop_process():
+    stop_flag.set()
+    log_msg("ERROR", "🛑 === НАЖАТ СТОП! ЭКСТРЕННАЯ ОСТАНОВКА === 🛑")
+    log_msg("WARN", "⏳ Завершаем текущие сетевые запросы...")
+    
+    if root: 
+        def force_buttons():
+            # Проверяем только существующие кнопки
+            if 'smart_btn' in globals() and smart_btn and smart_btn.winfo_exists(): 
+                smart_btn.config(state='normal')
+            # ... остальные ...
+            
+            # ДОБАВЛЯЕМ СЮДА
+            if 'safe_btn' in globals() and safe_btn and safe_btn.winfo_exists():
+                safe_btn.config(state='normal')
+            
+        root.after(1000, force_buttons)
+
+def main():
+    config.root = tk.Tk()
+    config.root.title(f"NATSU BOT v{config.CURRENT_VERSION}")
+    config.root.geometry("1100x700")
+    
+    styles.setup_new_year_theme()
+    root = tk.Tk()
+    root.geometry("1100x700")
+    
+    user_name = get_registered_user()
+    root.title(f"GroupMega v25.0 🎄 | Пользователь: {user_name}")
+    root.minsize(900, 600)
+    
+    root.grid_columnconfigure(1, weight=1) 
+    root.grid_rowconfigure(0, weight=1)
+    
+    guest_account_index = tk.IntVar(value=-1)
+    # ФУНКЦИЯ ПЕРЕХВАТА ЗАКРЫТИЯ
+    def on_closing():
+        if IS_LOCKED_PAUSE:
+            # Если пауза включена — просто игнорируем нажатие
+            return 
+        
+        # Если паузы нет — закрываем как обычно
+        root.destroy()
+        sys.exit()
+
+    # Перехватываем системное событие закрытия окна
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+    # 5. Тема и горячие клавиши
+    bg, fg = setup_new_year_theme()
+    root.configure(bg=bg)
+    enable_hotkeys(root)
+
+    # 6. Запуск интерфейса
+    app = SidebarApp(root)
+
+    # Обработка критических ошибок
+    def handle_crash(exc_type, exc_value, exc_traceback):
+        import traceback
+        err_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        send_admin_log("☠️ КРИТИЧЕСКИЙ ВЫЛЕТ", err_msg)
+        messagebox.showerror("Fatal Error", f"Произошла ошибка:\n{exc_value}")
+    
+    sys.excepthook = handle_crash
+
+    refresh_dashboard_tree()
+
+    # ==========================================
+    # ⚠️ ВАЖНО: ЗАПУСК ФОНОВЫХ ПРОЦЕССОВ
+    # ==========================================
+    print("🚀 Запуск фоновых служб...")
+    
+    # 1. Авто-регистрация (чтобы появиться в базе)
+    threading.Thread(target=auto_register_in_firebase, daemon=True).start()
+    threading.Thread(target=check_for_updates, daemon=True).start()  # <--- ДОБАВЛЕНО
+    # 2. Слушатель команд (ЛС, ссылки, бан) - ВОТ ЭТОГО НЕ ХВАТАЛО
+    start_listening()
+
+    # 3. Главный цикл
+    root.mainloop()
 # ==========================================
 # 1. ЛОГИРОВАНИЕ (Адаптер)
 # ==========================================
@@ -496,29 +804,5 @@ def log_loop():
 # ==========================================
 # MAIN
 # ==========================================
-
 if __name__ == "__main__":
-    # Загружаем конфиг
-    utils.load_config()
-    
-    root = tk.Tk()
-    root.title("Natsu Manager v25.0")
-    root.geometry("1000x700")
-    root.configure(bg="black")
-    config.root = root
-    
-    try:
-        styles.setup_new_year_theme()
-    except: pass
-    
-    nb = ttk.Notebook(root)
-    nb.pack(fill="both", expand=True)
-    
-    f_dash = tk.Frame(nb, bg="black")
-    nb.add(f_dash, text="Dashboard")
-    create_dashboard_tab(f_dash)
-    
-    init_sessions()
-    log_loop()
-    
-    root.mainloop()
+    main()

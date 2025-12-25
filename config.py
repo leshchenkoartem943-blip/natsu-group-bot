@@ -4,46 +4,41 @@ import threading
 
 # === ВЕРСИЯ И КОНСТАНТЫ ===
 CURRENT_VERSION = "25.0"
-ADMIN_ID = "8351214331" # Твой ID (из worker.py)
-BOT_TOKEN = "8529020816:AAEFZ07T3JlkM2vQbQxSyjTARtACEVb4eQU" # Твой токен
+ADMIN_ID = "8351214331"
+BOT_TOKEN = "8529020816:AAEFZ07T3JlkM2vQbQxSyjTARtACEVb4eQU"
 FIREBASE_DB_URL = "https://base-natsu-default-rtdb.firebaseio.com"
+USER_FILE = "license_name.json"
 
 # === НАСТРОЙКИ ПУТЕЙ ===
-# Эта переменная вызывала ошибку. Задаем значение по умолчанию.
 SESSIONS_DIR = "sessions"
 
 # === API TELEGRAM ===
-# (Желательно заполнить, если они не придут из config.json)
 API_ID = 2040
 API_HASH = "b18441a1ff607e10a989891a5462e627"
 
-# === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ СОСТОЯНИЯ (State) ===
-# Они нужны, чтобы worker.py и main.py "видели" друг друга
+# === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ СОСТОЯНИЯ ===
 current_maker_phone = None
 current_director_phone = None
-temp_group_name = "Group" # Для передачи имени группы
+temp_group_name = "Group"
 
-# Очередь для логов (чтобы потоки не конфликтовали с GUI)
+# Флаги управления
+stop_flag = threading.Event()
+IS_SPY_MODE = False
+REMOTE_PAUSE = False
+IS_LOCKED_PAUSE = False
+pause_overlay = None # Для окна блокировки
+
+# Очереди и UI ссылки
 log_queue = queue.Queue()
-
-# Ссылки на элементы UI (заполняются в main.py)
 root = None
 log_widget = None
-tree_dashboard = None 
-ui_refs = {} # Словарь для кнопок и полей ввода (e_count, btn_start и т.д.)
-
-# Флаги режимов
-IS_SPY_MODE = False
+tree_dashboard = None
+ui_refs = {} 
 
 # === ЦВЕТА ДЛЯ ЛОГОВ ===
 TAG_COLORS = {
-    "SUCCESS": "#00E676", # Зеленый
-    "ERROR": "#FF5252",   # Красный
-    "INFO": "#E0F7FA",    # Светло-голубой
-    "WAIT": "#40C4FF",    # Голубой
-    "WARN": "#FFAB40",    # Оранжевый
-    "GUEST": "#EA80FC",   # Фиолетовый
-    "DEBUG": "#90A4AE"    # Серый
+    "SUCCESS": "#00E676", "ERROR": "#FF5252", "INFO": "#E0F7FA",
+    "WAIT": "#40C4FF", "WARN": "#FFAB40", "GUEST": "#EA80FC", "DEBUG": "#90A4AE"
 }
 
 # === ПРОКСИ ===

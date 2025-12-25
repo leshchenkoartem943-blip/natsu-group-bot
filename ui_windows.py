@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, Toplevel, scrolledtext
 import config
+import sys
+import subprocess
 
 # ==========================================
 # 1. ДИАЛОГ ВВОДА КОДА (Login / 2FA)
@@ -168,76 +170,345 @@ class MatchReviewWindow:
 # 3. НАСТРОЙКА СЛОВ (Shtrudirovka Words)
 # ==========================================
 
-def open_word_settings(parent, filename="words.txt", title="Список слов"):
-    """
-    Простой текстовый редактор для редактирования файла со словами.
-    """
-    win = Toplevel(parent)
-    win.title(title)
+def open_word_settings():
+    """Окно для ввода слов."""
+    win = Toplevel(root)
+    win.title("Настройка слов")
     win.geometry("400x500")
     win.configure(bg="#1E1E1E")
+    
+    tk.Label(win, text="Введите слова (каждое с новой строки):", 
+             bg="#1E1E1E", fg="white", font=("Segoe UI", 10, "bold")).pack(pady=10)
+             
+    tk.Label(win, text="Пример:\nВажное\nСотрудникам\nИнфо", 
+             bg="#1E1E1E", fg="#888", justify="left").pack(pady=5)
 
-    # Текстовое поле с прокруткой
-    txt_area = scrolledtext.ScrolledText(win, width=40, height=20, font=("Consolas", 10),
-                                        bg="#252525", fg="#00E676", insertbackground="white", bd=0)
-    txt_area.pack(fill="both", expand=True, padx=10, pady=10)
+    txt = scrolledtext.ScrolledText(win, width=40, height=15, font=("Consolas", 10))
+    txt.pack(padx=10, pady=5, fill="both", expand=True)
+    
+    # Загружаем текущие
+    cfg = load_config()
+    txt.insert("1.0", cfg.get("random_words_list", ""))
 
-    # Попытка загрузить существующий файл
-    try:
-        with open(filename, "r", encoding="utf-8") as f:
-            content = f.read()
-            txt_area.insert("1.0", content)
-    except FileNotFoundError:
-        pass # Если файла нет, поле будет пустым
+    def _save():
+        val = txt.get("1.0", tk.END).strip()
+        cfg = load_config()
+        cfg["random_words_list"] = val
+        save_config(cfg)
+        messagebox.showinfo("Готово", "Список слов сохранен!")
+        win.destroy()
 
-    def save_and_close():
-        content = txt_area.get("1.0", tk.END).strip()
+    tk.Button(win, text="💾 СОХРАНИТЬ", command=_save, bg="#00E676", fg="black").pack(fill="x", padx=20, pady=20)
+
+
+def create_note_tab(notebook, title, content=""):
+    frame = ttk.Frame(notebook)
+    notebook.add(frame, text=title)
+    
+    # === КРАСИВЫЙ РЕДАКТОР ===
+    # bg: Фон редактора
+    # fg: Цвет текста
+    # insertbackground: Цвет курсора (мигающей палочки)
+    # selectbackground: Цвет выделения текста мышкой
+    txt = scrolledtext.ScrolledText(frame, font=("Consolas", 11), 
+                                    bg="#1E1E1E",           # Темно-серый фон VS Code
+                                    fg="#E0E0E0",           # Светлый текст
+                                    insertbackground="#9D00FF", # Фиолетовый курсор
+                                    selectbackground="#512DA8", # Цвет выделения
+                                    selectforeground="white",
+                                    borderwidth=0,
+                                    padx=10, pady=10)       # Отступы внутри
+    txt.pack(fill="both", expand=True)
+    txt.insert("1.0", content)
+    
+    # Нижняя панель с кнопками
+    btn_frame = ttk.Frame(frame, style="Sidebar.TFrame", padding=5) # Темная подложка
+    btn_frame.pack(fill="x")
+    
+    def _save():
+        current_data = load_notes()
+        current_data[title] = txt.get("1.0", tk.END)
+        save_notes_to_file(current_data)
+        messagebox.showinfo("Сохранено", f"Заметка '{title}' сохранена!")
+
+    def _delete():
+        if messagebox.askyesno("Удаление", f"Удалить вкладку '{title}'?"):
+            current_data = load_notes()
+            if title in current_data:
+                del current_data[title]
+                save_notes_to_file(current_data)
+            notebook.forget(frame)
+
+    # Стильные кнопки
+    ttk.Button(btn_frame, text="💾 Сохранить", command=_save, style="Green.TButton").pack(side="left", padx=5)
+    ttk.Button(btn_frame, text="🗑 Удалить вкладку", command=_delete, style="Red.TButton").pack(side="right", padx=5)
+
+def set_freeze_mode(enable):
+    """
+    Полная заморозка программы.
+    enable=True: Создает экран-блокировщик, отключает крестик, останавливает потоки.
+    enable=False: Удаляет блокировщик, возвращает управление.
+    """
+    global REMOTE_PAUSE, pause_overlay, root
+    
+    # 1. Останавливаем/Запускаем фоновые процессы (ваши воркеры это уже умеют)
+    REMOTE_PAUSE = enable 
+
+    if enable:
+        # Если уже заблокировано - выходим
+        if pause_overlay and pause_overlay.winfo_exists(): return
+
+        # --- СОЗДАЕМ ОКНО-БЛОКИРОВЩИК ---
+        pause_overlay = Toplevel(root)
+        pause_overlay.title("PAUSE")
+        
+        # Размеры окна блокировки (чуть меньше главного или такое же)
+        w, h = 400, 200
+        # Центрируем
         try:
-            with open(filename, "w", encoding="utf-8") as f:
-                f.write(content)
-            messagebox.showinfo("Успех", "Список сохранен!", parent=win)
-            win.destroy()
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось сохранить: {e}", parent=win)
+            x = root.winfo_x() + (root.winfo_width() // 2) - (w // 2)
+            y = root.winfo_y() + (root.winfo_height() // 2) - (h // 2)
+            pause_overlay.geometry(f"{w}x{h}+{x}+{y}")
+        except:
+            pause_overlay.geometry(f"{w}x{h}")
 
-    # Кнопка сохранения
-    btn_save = tk.Button(win, text="💾 СОХРАНИТЬ И ЗАКРЫТЬ", command=save_and_close,
-                        bg="#448AFF", fg="white", font=("Segoe UI", 10, "bold"), cursor="hand2")
-    btn_save.pack(fill="x", padx=10, pady=10)
+        pause_overlay.configure(bg="#1E1E1E")
+        
+        # УБИРАЕМ РАМКИ ОКНА (Нет крестика, нет заголовка)
+        pause_overlay.overrideredirect(True)
+        
+        # Делаем его поверх всех окон
+        pause_overlay.attributes('-topmost', True)
+        
+        # Текст
+        tk.Label(pause_overlay, text="⏸ ПРОГРАММА НА ПАУЗЕ", 
+                 font=("Segoe UI", 16, "bold"), fg="#FF5252", bg="#1E1E1E").pack(expand=True)
+        tk.Label(pause_overlay, text="Ожидайте включения администратором...", 
+                 font=("Segoe UI", 10), fg="#888", bg="#1E1E1E").pack(pady=(0, 20))
 
+        # --- САМОЕ ГЛАВНОЕ: ЗАХВАТ УПРАВЛЕНИЯ ---
+        # grab_set делает так, что нажать можно ТОЛЬКО на это окно.
+        # Поскольку на нем нет кнопок, пользователь не может ничего сделать в основном окне.
+        pause_overlay.grab_set()
+        
+        # БЛОКИРУЕМ ЗАКРЫТИЕ ГЛАВНОГО ОКНА
+        # Переназначаем крестик главного окна на пустую функцию
+        root.protocol("WM_DELETE_WINDOW", lambda: None)
+        
+        print("❄️ Программа заморожена.")
+
+    else:
+        # --- РАЗМОРОЗКА ---
+        if pause_overlay:
+            try:
+                pause_overlay.grab_release() # Отпускаем управление
+                pause_overlay.destroy()
+            except: pass
+            pause_overlay = None
+
+        # ВОЗВРАЩАЕМ РАБОТУ КРЕСТИКА ГЛАВНОГО ОКНА
+        root.protocol("WM_DELETE_WINDOW", root.destroy)
+        
+        print("🔥 Программа разморожена.")
+
+
+def open_new_window():
+    try: subprocess.Popen([sys.executable, __file__])
+    except Exception as e: messagebox.showerror("Ошибка", f"Не удалось открыть новое окно: {e}")
+
+def enable_hotkeys(window):
+    """
+    Универсальный метод: перехватывает нажатие клавиш с Ctrl.
+    ИСПРАВЛЕНИЕ: Проверяет раскладку, чтобы не было двойной вставки на английском.
+    """
+    def check_key(event):
+        # Если Tkinter распознал латинскую букву, значит раскладка EN.
+        # В этом случае стандартная вставка сработает сама, нам не нужно дублировать событие.
+        if event.keysym.lower() in ['c', 'v', 'x', 'a']:
+            return
+
+        # Если мы здесь, значит раскладка другая (например, RU), и Tkinter может не отработать.
+        # Форсируем событие через коды клавиш.
+        try:
+            # 67=C, 86=V, 88=X, 65=A (Коды клавиш Windows)
+            if event.keycode == 67: event.widget.event_generate("<<Copy>>")
+            elif event.keycode == 86: event.widget.event_generate("<<Paste>>")
+            elif event.keycode == 88: event.widget.event_generate("<<Cut>>")
+            elif event.keycode == 65: event.widget.event_generate("<<SelectAll>>")
+        except: pass
+
+    try:
+        window.bind_all("<Control-Key>", check_key)
+    except Exception as e:
+        print(f"Ошибка бинда: {e}")
+
+def setup_scroll_canvas(canvas, inner_frame):
+    """
+    Настраивает скролл, который работает ВЕЗДЕ: 
+    на канвасе, на фрейме и подготавливает функцию для дочерних элементов.
+    """
+    
+    # 1. Функция самого скролла
+    def _on_wheel(event):
+        # Для Windows/MacOS (MouseWheel) и Linux (Button-4/5)
+        if event.num == 5 or event.delta < 0:
+            canvas.yview_scroll(1, "units")
+        elif event.num == 4 or event.delta > 0:
+            canvas.yview_scroll(-1, "units")
+
+    # 2. Функция, которая "включает" скролл при наведении мыши
+    def _bind_to_mouse(event):
+        # Биндим глобально на всё окно при наведении на элемент
+        canvas.bind_all("<MouseWheel>", _on_wheel)
+        canvas.bind_all("<Button-4>", _on_wheel)
+        canvas.bind_all("<Button-5>", _on_wheel)
+
+    # 3. Функция, которая "выключает" скролл, когда мышь уходит
+    def _unbind_from_mouse(event):
+        canvas.unbind_all("<MouseWheel>")
+        canvas.unbind_all("<Button-4>")
+        canvas.unbind_all("<Button-5>")
+
+    # 4. Применяем сразу к самому канвасу и главному фрейму
+    for widget in [canvas, inner_frame]:
+        widget.bind('<Enter>', _bind_to_mouse)
+        widget.bind('<Leave>', _unbind_from_mouse)
+        
+    # 5. ВАЖНО: Сохраняем эти функции внутри inner_frame, 
+    # чтобы потом "навесить" их на каждый чекбокс в refresh_main_checks
+    inner_frame.scroll_handlers = (_bind_to_mouse, _unbind_from_mouse)
 
 # ==========================================
 # 4. ВЫБОР РЕЖИМА / СЕКЦИИ (Универсальный)
 # ==========================================
 
-def ask_section_gui(parent, sections):
+def ask_section_gui(sections_dict):
     """
-    Показывает окно с кнопками для выбора одного из вариантов.
-    sections: список строк ["Вариант 1", "Вариант 2"]
+    Показывает окно с ЧЕКБОКСАМИ для выбора одной или нескольких секций.
+    Возвращает склеенный текст выбранных секций.
     """
-    win = Toplevel(parent)
-    win.title("Сделайте выбор")
-    win.geometry("300x400")
-    win.configure(bg="#222")
+    if not sections_dict: return None
     
-    selected = tk.StringVar(value="")
+    result = {"selected_text": None, "name": None}
+    section_vars = {} # Словарь для хранения состояний галочек {имя_секции: IntVer}
     
-    tk.Label(win, text="Выберите действие:", bg="#222", fg="white", font=("Segoe UI", 11)).pack(pady=15)
+    # Создаем окно
+    win = Toplevel(root)
+    win.title(f"Найдено секций: {len(sections_dict)}")
+    win.geometry("450x600") 
+    win.configure(bg="#1F1F1F")
 
-    for sec in sections:
-        b = tk.Button(win, text=sec, 
-                     command=lambda s=sec: [selected.set(s), win.destroy()],
-                     bg="#333", fg="white", font=("Segoe UI", 10),
-                     activebackground="#00E676", activeforeground="black",
-                     anchor="w", padx=20, pady=5, cursor="hand2")
-        b.pack(fill="x", padx=20, pady=5)
+    # Заголовок
+    tk.Label(win, text="📂 Выберите секции для работы\n(можно несколько):", 
+             bg="#1F1F1F", fg="white", font=("Segoe UI", 12, "bold")).pack(pady=10)
 
-    # Модальность
-    win.transient(parent)
+    # Панель управления (Выбрать все)
+    ctrl_frame = tk.Frame(win, bg="#1F1F1F")
+    ctrl_frame.pack(fill="x", padx=15, pady=5)
+    
+    def toggle_all(state):
+        for var in section_vars.values():
+            var.set(state)
+
+    tk.Button(ctrl_frame, text="✅ Выбрать все", command=lambda: toggle_all(1), 
+              bg="#2E3440", fg="#A3BE8C", font=("Consolas", 9), bd=0, padx=10).pack(side="left")
+    
+    tk.Button(ctrl_frame, text="❌ Снять все", command=lambda: toggle_all(0), 
+              bg="#2E3440", fg="#BF616A", font=("Consolas", 9), bd=0, padx=10).pack(side="right")
+
+    # === КОНТЕЙНЕР ДЛЯ СКРОЛЛА ===
+    container = ttk.Frame(win)
+    container.pack(fill="both", expand=True, padx=10, pady=5)
+    
+    canvas = tk.Canvas(container, bg="#1F1F1F", highlightthickness=0)
+    scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+    
+    scrollable_frame = ttk.Frame(canvas)
+
+    scrollable_frame.bind(
+        "<Configure>",
+        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    )
+
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw", width=400)
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+
+    # Скролл мышкой
+    def _on_mousewheel(event):
+        canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+    canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+    # === ГЕНЕРАЦИЯ ЧЕКБОКСОВ ===
+    # Стиль для чекбоксов
+    style = ttk.Style()
+    style.configure("Dark.TCheckbutton", background="#1F1F1F", foreground="#E0E0E0", font=("Consolas", 11))
+
+    for sec_name in sections_dict.keys():
+        var = tk.IntVar()
+        section_vars[sec_name] = var
+        
+        # Фрейм для красивого отступа
+        row = tk.Frame(scrollable_frame, bg="#1F1F1F")
+        row.pack(fill="x", pady=2, padx=5)
+        
+        chk = ttk.Checkbutton(row, text=f" {sec_name}", variable=var, style="Dark.TCheckbutton")
+        chk.pack(side="left", fill="x", expand=True, padx=5, pady=5)
+
+    # === ЛОГИКА ПОДТВЕРЖДЕНИЯ ===
+    def confirm_selection():
+        selected_keys = [k for k, v in section_vars.items() if v.get() == 1]
+        
+        if not selected_keys:
+            messagebox.showwarning("!", "Выберите хотя бы одну секцию!")
+            return
+        
+        # 1. Склеиваем текст всех выбранных секций
+        combined_text = ""
+        for k in selected_keys:
+            # Добавляем разделитель на всякий случай, если его нет
+            combined_text += sections_dict[k] + "\n"
+
+        # 2. Формируем красивое название для логов/отчета
+        if len(selected_keys) == 1:
+            final_name = selected_keys[0]
+        elif len(selected_keys) == len(sections_dict):
+            final_name = "Все секции"
+        else:
+            # Если выбрано несколько, перечисляем (Секция 1 + Секция 3)
+            # Или диапазон, если хочется короче
+            final_name = " + ".join(selected_keys)
+            if len(final_name) > 50: # Если слишком длинное название
+                final_name = f"{selected_keys[0]} ... {selected_keys[-1]} ({len(selected_keys)} шт)"
+
+        result["selected_text"] = combined_text
+        result["name"] = final_name
+        
+        canvas.unbind_all("<MouseWheel>")
+        win.destroy()
+
+    # Кнопка подтверждения внизу
+    btn_confirm = tk.Button(win, text="🚀 ПРОДОЛЖИТЬ С ВЫБРАННЫМИ", command=confirm_selection, 
+                            bg="#00E676", fg="black", font=("Segoe UI", 11, "bold"), pady=10)
+    btn_confirm.pack(fill="x", padx=20, pady=15)
+
+    # Центрируем и ждем
+    win.update_idletasks()
+    sw = win.winfo_screenwidth()
+    sh = win.winfo_screenheight()
+    w = win.winfo_width()
+    h = win.winfo_height()
+    win.geometry(f"+{(sw - w)//2}+{(sh - h)//2}")
+
+    win.transient(root)
     win.grab_set()
-    parent.wait_window(win)
+    root.wait_window(win)
     
-    return selected.get()
+    canvas.unbind_all("<MouseWheel>") # Чистим бинды
+    
+    return result
 
 
 # ==========================================
