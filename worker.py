@@ -4,7 +4,7 @@ import tkinter.simpledialog as simpledialog
 import os
 import sys
 import pygame
-
+import concurrent.futures
 import random
 import requests
 from telethon import functions, types
@@ -13,6 +13,7 @@ from telethon.tl.functions.messages import EditChatAdminRequest
 from telethon import utils
 import threading
 import glob
+import queue
 from collections import deque
 import math
 import time
@@ -439,7 +440,29 @@ def send_admin_log(action_name, details=""):
     # Запускаем в отдельном потоке, чтобы программа не висла
         threading.Thread(target=lambda: push_log_firebase(short_log), daemon=True).start()
     except Exception: pass
-
+def check_single_proxy(proxy_str):
+    """
+    Возвращает True, если прокси жив, иначе False.
+    Формат: IP:PORT:USER:PASS
+    """
+    try:
+        parts = proxy_str.strip().split(":")
+        if len(parts) != 4: return False
+        
+        # Формируем строку для requests: http://user:pass@ip:port
+        ip, port, user, pwd = parts
+        proxy_url = f"http://{user}:{pwd}@{ip}:{port}"
+        
+        proxies = {
+            "http": proxy_url,
+            "https": proxy_url
+        }
+        
+        # Пробуем дернуть гугл с жестким таймаутом 5 сек
+        r = requests.get("http://www.google.com", proxies=proxies, timeout=5)
+        return r.status_code == 200
+    except:
+        return False
 # ==========================================
 # === УДАЛЕННОЕ ОТКЛЮЧЕНИЕ (KILL SWITCH) ===
 # ==========================================
@@ -559,6 +582,7 @@ def save_config(config, filepath="config.json"):
 # 🛑 Глобальные переменные
 stop_flag = threading.Event()
 root = None
+log_queue = queue.Queue()
 log_widget = None
 check_vars = []
 guest_account_index = None 
@@ -3428,119 +3452,260 @@ def setup_new_year_theme():
     return bg_main, bg_input
 
 # === ЛОГИКА ВКЛАДКИ НАСТРОЕК (ВСТРОЕННАЯ) ===
-def create_settings_tab(parent):
-    cfg = load_config()
-    fr = ttk.Frame(parent, padding=20)
+def check_proxy_connection(proxy_str):
+    """
+    Проверяет прокси. Возвращает (proxy_clean, True/False, status_text)
+    """
+    clean_proxy = proxy_str.split(" ")[0].strip()
+    try:
+        parts = clean_proxy.split(":")
+        if len(parts) != 4: return clean_proxy, False, "FORMAT ERROR"
+
+        ip, port, user, pwd = parts
+        proxy_url = f"http://{user}:{pwd}@{ip}:{port}"
+        
+        proxies = {"http": proxy_url, "https": proxy_url}
+        resp = requests.get("http://www.google.com", proxies=proxies, timeout=5)
+        
+        if resp.status_code == 200: return clean_proxy, True, "OK"
+        else: return clean_proxy, False, f"CODE {resp.status_code}"
+    except:
+        return clean_proxy, False, "DEAD"
+
+def create_proxy_tab(parent):
+    # Импорты должны быть в начале файла, но на всякий случай:
+    # import concurrent.futures
+    # import requests
+
+    fr = ttk.Frame(parent, padding=15)
     fr.pack(fill="both", expand=True)
 
-    # 1. ВЕРХНИЙ ФРЕЙМ ДЛЯ КНОПОК
-    top_btn_frame = ttk.Frame(fr)
-    top_btn_frame.pack(side="top", fill="x", pady=(0, 20))
+    # --- ЗАГОЛОВОК ---
+    header = ttk.Frame(fr)
+    header.pack(fill="x", pady=(0, 10))
+    ttk.Label(header, text="🛡 Управление Прокси", font=("Segoe UI", 14, "bold"), foreground="white").pack(side="left")
+    
+    # Статус бар (справа сверху)
+    lbl_status = ttk.Label(header, text="Готов к работе", foreground="#888")
+    lbl_status.pack(side="right", anchor="e")
 
-    # 2. ФРЕЙМ ДЛЯ КОЛОНОК С НАСТРОЙКАМИ
-    cols_frame = ttk.Frame(fr)
-    cols_frame.pack(side="top", fill="both", expand=True)
+    # --- ТАБЛИЦА ПРОКСИ ---
+    tree_frame = ttk.Frame(fr)
+    tree_frame.pack(fill="both", expand=True)
 
-    # --- Левая колонка (Тайминги) ---
-    left_col = ttk.LabelFrame(cols_frame, text=" ⏱ Тайминги и Задержки ", padding=15)
-    left_col.pack(side="left", fill="both", expand=True, padx=(0, 10))
+    columns = ("proxy", "status")
+    tree_proxy = ttk.Treeview(tree_frame, columns=columns, show="headings", selectmode="extended")
+    
+    tree_proxy.heading("proxy", text="IP:PORT:USER:PASS")
+    tree_proxy.heading("status", text="Статус")
+    
+    tree_proxy.column("proxy", width=400)
+    tree_proxy.column("status", width=150, anchor="center")
+    
+    sb = ttk.Scrollbar(tree_frame, orient="vertical", command=tree_proxy.yview)
+    tree_proxy.configure(yscrollcommand=sb.set)
+    
+    tree_proxy.pack(side="left", fill="both", expand=True)
+    sb.pack(side="right", fill="y")
 
-    # Переменная чекбокса
+    # Заполнение таблицы
+    def refresh_proxy_table():
+        for i in tree_proxy.get_children(): tree_proxy.delete(i)
+        for p in MY_PROXIES:
+            tree_proxy.insert("", "end", values=(p, "Unknown"))
+    
+    refresh_proxy_table() # Первичная загрузка
+
+    # --- ЛОГИКА ПРОВЕРКИ ---
+    def check_proxies_thread(items_to_check, item_ids):
+        success, dead = 0, 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+            future_map = {executor.submit(check_proxy_connection, p): (p, item_ids[i]) for i, p in enumerate(items_to_check)}
+            
+            for future in concurrent.futures.as_completed(future_map):
+                try:
+                    _, is_alive, msg = future.result()
+                    s_txt = "✅ OK" if is_alive else f"❌ {msg}"
+                    tag = "ok" if is_alive else "dead"
+                    
+                    if is_alive: success += 1
+                    else: dead += 1
+                    
+                    # Обновляем UI
+                    p_str, iid = future_map[future]
+                    if root: 
+                        root.after(0, lambda i=iid, s=s_txt, t=tag: tree_proxy.item(i, values=(tree_proxy.item(i)['values'][0], s), tags=(t,)))
+                except: pass
+        
+        if root:
+            root.after(0, lambda: lbl_status.config(text=f"Итог: Живых {success} | Мертвых {dead}", foreground="white"))
+            root.after(0, lambda: enable_buttons(True))
+
+    def run_check(mode="all"):
+        items = []
+        if mode == "selected":
+            sel = tree_proxy.selection()
+            if not sel: return messagebox.showwarning("!", "Ничего не выбрано!")
+            items = [(tree_proxy.item(i)['values'][0], i) for i in sel]
+        else:
+            items = [(tree_proxy.item(i)['values'][0], i) for i in tree_proxy.get_children()]
+        
+        if not items: return
+        
+        lbl_status.config(text=f"⏳ Проверяем {len(items)} прокси...", foreground="#FFD700")
+        enable_buttons(False)
+        
+        # Визуально ставим часики
+        for _, iid in items: 
+            tree_proxy.item(iid, values=(tree_proxy.item(iid)['values'][0], "⏳..."))
+            
+        threading.Thread(target=check_proxies_thread, args=([x[0] for x in items], [x[1] for x in items]), daemon=True).start()
+
+    def delete_proxies(mode="selected"):
+        global MY_PROXIES
+        to_del_ids = []
+        
+        if mode == "selected":
+            to_del_ids = tree_proxy.selection()
+        elif mode == "dead":
+            for i in tree_proxy.get_children():
+                st = tree_proxy.item(i)['values'][1]
+                if "❌" in st or "DEAD" in st or "ERROR" in st or "CODE" in st:
+                    to_del_ids.append(i)
+        
+        if not to_del_ids: return
+
+        count = len(to_del_ids)
+        if mode == "dead" and not messagebox.askyesno("Чистка", f"Удалить {count} нерабочих прокси?"):
+            return
+
+        for i in to_del_ids:
+            val = tree_proxy.item(i)['values'][0]
+            if val in MY_PROXIES: MY_PROXIES.remove(val)
+            tree_proxy.delete(i)
+            
+        lbl_status.config(text=f"🗑 Удалено {count} шт.", foreground="#FF5252")
+
+    def enable_buttons(state):
+        s = "normal" if state else "disabled"
+        btn_chk_sel.config(state=s)
+        btn_chk_all.config(state=s)
+        btn_del_sel.config(state=s)
+        btn_cln_dead.config(state=s)
+
+    # --- ПАНЕЛЬ КНОПОК ---
+    btn_frame = ttk.Frame(fr, padding=(0, 10))
+    btn_frame.pack(fill="x")
+
+    btn_chk_sel = ttk.Button(btn_frame, text="🔍 Проверить ВЫБРАННЫЕ", command=lambda: run_check("selected"))
+    btn_chk_sel.pack(side="left", padx=(0, 5))
+
+    btn_chk_all = ttk.Button(btn_frame, text="Check ALL", command=lambda: run_check("all"))
+    btn_chk_all.pack(side="left", padx=(0, 20))
+
+    btn_del_sel = ttk.Button(btn_frame, text="🗑 Удалить ВЫБРАННЫЕ", command=lambda: delete_proxies("selected"))
+    btn_del_sel.pack(side="left", padx=(0, 5))
+
+    btn_cln_dead = ttk.Button(btn_frame, text="💀 Удалить МЕРТВЫЕ", command=lambda: delete_proxies("dead"), style="Red.TButton")
+    btn_cln_dead.pack(side="left")
+
+    # --- БЛОК ДОБАВЛЕНИЯ ---
+    add_frame = ttk.LabelFrame(fr, text=" ➕ Добавить списком ", padding=10)
+    add_frame.pack(fill="x", pady=(10, 0))
+
+    txt_add = scrolledtext.ScrolledText(add_frame, height=4, font=("Consolas", 9), bg="#111", fg="#AAA")
+    txt_add.pack(fill="x", pady=(0, 5))
+    
+    def add_bulk():
+        raw = txt_add.get("1.0", tk.END).strip().splitlines()
+        cnt = 0
+        global MY_PROXIES
+        for l in raw:
+            c = l.strip()
+            # Простейшая валидация IP:PORT:USER:PASS
+            if c and c.count(":") == 3 and c not in MY_PROXIES:
+                MY_PROXIES.append(c)
+                tree_proxy.insert("", "end", values=(c, "New"))
+                cnt += 1
+        
+        lbl_status.config(text=f"✅ Добавлено {cnt} новых", foreground="#00E676")
+        txt_add.delete("1.0", tk.END)
+
+    ttk.Button(add_frame, text="⬇ ИМПОРТИРОВАТЬ В БАЗУ", command=add_bulk, style="Green.TButton").pack(fill="x")
+
+    # Цвета таблицы
+    tree_proxy.tag_configure("ok", foreground="#00E676")
+    tree_proxy.tag_configure("dead", foreground="#FF5252")
+
+# === НОВАЯ ФУНКЦИЯ НАСТРОЕК С ТАБЛИЦЕЙ ===
+def create_settings_tab(parent):
+    cfg = load_config()
+    
+    # Центрирующий контейнер
+    fr = ttk.Frame(parent, padding=30)
+    fr.pack(fill="both", expand=True)
+
+    ttk.Label(fr, text="⚙ Настройки Процесса", font=("Segoe UI", 16, "bold"), foreground="white").pack(anchor="w", pady=(0, 20))
+
+    # --- КОЛОНКА 1: ТАЙМИНГИ ---
+    lf_time = ttk.LabelFrame(fr, text=" ⏱ Тайминги (сек) ", padding=15)
+    lf_time.pack(fill="x", pady=(0, 20))
+
+    # Рандомная задержка
     var_rand = tk.IntVar(value=int(cfg.get("random_delay", "1")))
     
-    # ФУНКЦИЯ ВКЛЮЧЕНИЯ/ВЫКЛЮЧЕНИЯ ПОЛЕЙ
-    def toggle_inputs(*args):
-        state = 'normal' if var_rand.get() else 'disabled'
-        e_rand_min.config(state=state)
-        e_rand_max.config(state=state)
-   
-    var_rand.trace_add("write", toggle_inputs)
-
-    # 1. Чекбокс
-    chk_rand = ttk.Checkbutton(left_col, text="Включить случайную задержку (+ к основной)", variable=var_rand)
-    chk_rand.pack(anchor="w", pady=(0, 5))
-
-    # 2. Поля настройки диапазона (НОВОЕ)
-    f_range = ttk.Frame(left_col)
-    f_range.pack(fill="x", padx=20, pady=(0, 15))
+    def toggle_rand(*args):
+        st = 'normal' if var_rand.get() else 'disabled'
+        e_rmin.config(state=st)
+        e_rmax.config(state=st)
     
-    ttk.Label(f_range, text="от").pack(side="left")
-    e_rand_min = ttk.Entry(f_range, width=5, font=("Consolas", 10))
-    e_rand_min.pack(side="left", padx=5)
-    e_rand_min.insert(0, cfg.get("random_min", "10"))
-    
-    ttk.Label(f_range, text="до").pack(side="left")
-    e_rand_max = ttk.Entry(f_range, width=5, font=("Consolas", 10))
-    e_rand_max.pack(side="left", padx=5)
-    e_rand_max.insert(0, cfg.get("random_max", "30"))
-    
-    ttk.Label(f_range, text="сек").pack(side="left")
+    var_rand.trace_add("write", toggle_rand)
 
-    # 3. Основные задержки
-    f_t1 = ttk.Frame(left_col)
-    f_t1.pack(fill="x", pady=5)
-    ttk.Label(f_t1, text="Пауза после создания группы (сек):").pack(side="left")
-    e1 = ttk.Entry(f_t1, width=10, font=("Consolas", 10))
-    e1.pack(side="right")
-    e1.insert(0, cfg.get("delay_creation", "180"))
+    chk = ttk.Checkbutton(lf_time, text="Использовать случайную задержку", variable=var_rand)
+    chk.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
 
-    f_t2 = ttk.Frame(left_col)
-    f_t2.pack(fill="x", pady=5)
-    ttk.Label(f_t2, text="Пауза после инвайта контакта (сек):").pack(side="left")
-    e2 = ttk.Entry(f_t2, width=10, font=("Consolas", 10))
-    e2.pack(side="right")
-    e2.insert(0, cfg.get("delay_contact", "20"))
-
-    # Вызываем один раз, чтобы выставить правильное состояние при старте
-    toggle_inputs()
-
-    # --- Правая колонка (Технические настройки) ---
-    right_col = ttk.LabelFrame(cols_frame, text=" ⚙ Тех. процесс инвайта ", padding=15)
-    right_col.pack(side="right", fill="both", expand=True, padx=(10, 0))
-
-    ttk.Label(right_col, text="Порядок действий:", foreground="#aaaaaa").pack(anchor="w", pady=(0, 10))
+    ttk.Label(lf_time, text="Диапазон рандома: от").grid(row=1, column=0, sticky="w")
+    e_rmin = ttk.Entry(lf_time, width=5); e_rmin.insert(0, cfg.get("random_min", "10")); e_rmin.grid(row=1, column=1, sticky="w", padx=5)
     
-    v_mode = tk.IntVar(value=int(cfg.get("contact_mode", "1")))
-    
-    r1 = ttk.Radiobutton(right_col, text="Создать группу -> СРАЗУ добавить контакт", variable=v_mode, value=0)
-    r1.pack(anchor="w", pady=5)
-    
-    r2 = ttk.Radiobutton(right_col, text="Сначала создать ВСЕ группы -> ПОТОМ добавить контакты", variable=v_mode, value=1)
-    r2.pack(anchor="w", pady=5)
-    
-    ttk.Label(right_col, text="(Второй вариант безопаснее для аккаунтов)", font=("Segoe UI", 8), foreground="#666").pack(anchor="w", padx=20)
+    ttk.Label(lf_time, text="до").grid(row=1, column=2, sticky="w")
+    e_rmax = ttk.Entry(lf_time, width=5); e_rmax.insert(0, cfg.get("random_max", "30")); e_rmax.grid(row=1, column=3, sticky="w", padx=5)
 
-    # --- ФУНКЦИЯ СОХРАНЕНИЯ ---
+    # Фиксированные паузы
+    ttk.Separator(lf_time, orient="horizontal").grid(row=2, column=0, columnspan=4, sticky="ew", pady=10)
+
+    ttk.Label(lf_time, text="Пауза после создания группы:").grid(row=3, column=0, columnspan=2, sticky="w", pady=5)
+    e1 = ttk.Entry(lf_time, width=8); e1.insert(0, cfg.get("delay_creation", "180")); e1.grid(row=3, column=3, sticky="w")
+
+    ttk.Label(lf_time, text="Пауза после инвайта:").grid(row=4, column=0, columnspan=2, sticky="w", pady=5)
+    e2 = ttk.Entry(lf_time, width=8); e2.insert(0, cfg.get("delay_contact", "20")); e2.grid(row=4, column=3, sticky="w")
+
+    toggle_rand() # init state
+
+    # --- КОЛОНКА 2: ЛОГИКА ---
+    lf_logic = ttk.LabelFrame(fr, text=" 🧠 Логика работы ", padding=15)
+    lf_logic.pack(fill="x", pady=(0, 20))
+
+    v_mode = tk.IntVar(value=int(cfg.get("contact_mode", "0")))
+    ttk.Radiobutton(lf_logic, text="Потоковый режим (Создал -> Добавил -> Уснул)", variable=v_mode, value=0).pack(anchor="w", pady=2)
+    ttk.Radiobutton(lf_logic, text="Пакетный режим (Сначала создать все группы, потом добавлять)", variable=v_mode, value=1).pack(anchor="w", pady=2)
+
+    # --- КНОПКИ ---
     def save_settings():
         new_cfg = cfg.copy()
         new_cfg["random_delay"] = str(var_rand.get())
-        
-        # Сохраняем новые поля
-        new_cfg["random_min"] = e_rand_min.get().strip() or "10"
-        new_cfg["random_max"] = e_rand_max.get().strip() or "30"
-        
-        new_cfg["delay_creation"] = e1.get()
-        new_cfg["delay_contact"] = e2.get()
-        
-        new_cfg["add_username"] = "1"
-        new_cfg["add_contacts"] = "1"
+        new_cfg["random_min"] = e_rmin.get().strip()
+        new_cfg["random_max"] = e_rmax.get().strip()
+        new_cfg["delay_creation"] = e1.get().strip()
+        new_cfg["delay_contact"] = e2.get().strip()
         new_cfg["contact_mode"] = str(v_mode.get())
-        
         save_config(new_cfg)
-        messagebox.showinfo("Настройки", "✅ Настройки успешно сохранены!")
+        messagebox.showinfo("Настройки", "✅ Сохранено!")
 
-    # --- СОЗДАНИЕ КНОПОК (ИЗМЕНЕНО) ---
-    # Создаем контейнер для кнопок, чтобы они были по центру
-    btns_container = ttk.Frame(top_btn_frame)
-    btns_container.pack(anchor="center")
-
-    # Кнопка сохранения
-    ttk.Button(btns_container, text="💾 СОХРАНИТЬ НАСТРОЙКИ", command=save_settings, style="Green.TButton", width=25)\
-        .pack(side="left", padx=5, ipady=5)
-
-    # Кнопка НОВОЕ ОКНО (для мульти-запуска)
-    ttk.Button(btns_container, text="❐ ОТКРЫТЬ НОВОЕ ОКНО", command=open_new_window, width=25)\
-        .pack(side="left", padx=5, ipady=5)
+    btn_frame = ttk.Frame(fr)
+    btn_frame.pack(fill="x")
+    
+    ttk.Button(btn_frame, text="💾 СОХРАНИТЬ ВСЕ", command=save_settings, style="Green.TButton").pack(side="left", fill="x", expand=True, padx=(0, 10))
+    ttk.Button(btn_frame, text="❐ НОВОЕ ОКНО", command=open_new_window).pack(side="right", fill="x", expand=True)
 # ==========================================
 # === ОКНО ВЫБОРА ДЛЯ ШТРУДИРОВКИ ===
 # ==========================================
@@ -4444,7 +4609,7 @@ def create_dashboard_tab(parent):
     action_frame.columnconfigure(0, weight=1)
     action_frame.columnconfigure(1, weight=1)
 
-    global smart_btn, contacts_btn, no_auth_btn, stop_btn, safe_btn, tapok_btn # <--- ДОБАВЬТЕ tapok_btn СЮДА
+    global smart_btn, contacts_btn, no_auth_btn, stop_btn, safe_btn # <--- ДОБАВЬТЕ tapok_btn СЮДА
     
     smart_btn = ttk.Button(action_frame, text="🚀 ПО БАЗЕ (TXT)", command=lambda: start_process("smart"), style="Green.TButton")
     smart_btn.grid(row=0, column=0, sticky="ew", padx=2, pady=2, ipady=5)
@@ -5669,6 +5834,7 @@ class SidebarApp:
         self.frames["Главная"] = ttk.Frame(self.content_area)
         self.frames["Accounts"] = ttk.Frame(self.content_area)
         self.frames["Settings"] = ttk.Frame(self.content_area)
+        self.frames["Proxies"] = ttk.Frame(self.content_area)
         self.frames["Databases"] = ttk.Frame(self.content_area)
         self.frames["Notes"] = ttk.Frame(self.content_area)
         self.frames["Secret"] = ttk.Frame(self.content_area)
@@ -5679,6 +5845,7 @@ class SidebarApp:
         create_databases_tab(self.frames["Databases"])
         create_admin_tab(self.frames["Admin"])
         create_settings_tab(self.frames["Settings"])
+        create_proxy_tab(self.frames["Proxies"])
         self._init_notes_screen(self.frames["Notes"])
         create_secret_tab(self.frames["Secret"])
 
@@ -5687,6 +5854,7 @@ class SidebarApp:
         self._add_menu_btn("⛄ Аккаунты", "Accounts")
         self._add_menu_btn("❄️ Базы", "Databases")
         self._add_menu_btn("⚙ Настройки", "Settings")
+        self._add_menu_btn("🛡 Прокси", "Proxies")
         self._add_menu_btn("📝 Заметки", "Notes")
         self._add_menu_btn("🔐 Админка", "Admin")
         self._add_menu_btn("🕹 Секретное", "Secret")
